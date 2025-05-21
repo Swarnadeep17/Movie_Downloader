@@ -1,3 +1,4 @@
+import os
 import json, threading, schedule, requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -115,5 +116,4 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    import os
     main()
