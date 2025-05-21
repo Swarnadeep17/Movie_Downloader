@@ -1,119 +1,139 @@
 import os
-import json, threading, schedule, requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import json
+import datetime
+import requests
+import logging
+import asyncio
+import schedule
+import time
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-def search_movies(query):
-    url = "https://yts.mx/api/v2/list_movies.json"
-    params = {"query_term": query}
-    try:
-        res = requests.get(url, params=params).json()
-        movies = res.get("data", {}).get("movies", [])
-        results = []
-        for movie in movies:
-            res_options = []
-            for t in movie.get("torrents", []):
-                res_options.append({
-                    "quality": t["quality"],
-                    "size": t["size"],
-                    "url": t["url"]
-                })
-            results.append({
-                "title": movie["title_long"],
-                "slug": movie["slug"],
-                "resolutions": res_options
-            })
-        return results
-    except:
-        return []
+DATA_FILE = "stats.json"
 
-def init_stats():
-    try:
-        with open("stats.json") as f: json.load(f)
-    except:
-        with open("stats.json", "w") as f:
-            json.dump({"daily": {"users": [], "downloads": 0}, "monthly": {"users": [], "downloads": 0}}, f)
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({"daily": {"users": [], "downloads": 0},
+                   "monthly": {"users": [], "downloads": 0}}, f)
 
-def update_stats(user_id, download=False):
-    with open("stats.json", "r+") as f:
-        stats = json.load(f)
-        for key in ["daily", "monthly"]:
-            if user_id not in stats[key]["users"]:
-                stats[key]["users"].append(user_id)
-            if download:
-                stats[key]["downloads"] += 1
-        f.seek(0)
-        json.dump(stats, f, indent=2)
-        f.truncate()
+def load_stats():
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+def save_stats(stats):
+    with open(DATA_FILE, "w") as f:
+        json.dump(stats, f)
+
+def update_stats(user_id, is_download=False):
+    stats = load_stats()
+    today = stats["daily"]
+    month = stats["monthly"]
+
+    if user_id not in today["users"]:
+        today["users"].append(user_id)
+    if user_id not in month["users"]:
+        month["users"].append(user_id)
+
+    if is_download:
+        today["downloads"] += 1
+        month["downloads"] += 1
+
+    save_stats(stats)
 
 def reset_daily():
-    with open("stats.json", "r+") as f:
-        stats = json.load(f)
-        stats["daily"] = {"users": [], "downloads": 0}
-        f.seek(0)
-        json.dump(stats, f, indent=2)
-        f.truncate()
+    stats = load_stats()
+    stats["daily"] = {"users": [], "downloads": 0}
+    save_stats(stats)
 
 def reset_monthly():
-    with open("stats.json", "r+") as f:
-        stats = json.load(f)
-        stats["monthly"] = {"users": [], "downloads": 0}
-        f.seek(0)
-        json.dump(stats, f, indent=2)
-        f.truncate()
+    stats = load_stats()
+    stats["monthly"] = {"users": [], "downloads": 0}
+    save_stats(stats)
 
-def schedule_tasks():
-    schedule.every().day.at("00:00").do(reset_daily)
-    schedule.every().month.at("00:00").do(reset_monthly)
-    def loop(): 
-        while True: schedule.run_pending()
-    threading.Thread(target=loop, daemon=True).start()
+def check_and_reset_monthly():
+    if datetime.datetime.now().day == 1:
+        reset_monthly()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi! Send me a movie or series name to get download options.")
+    await update.message.reply_text("Send the name of a movie or series to search.")
 
-async def handle_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = load_stats()
+    daily_users = len(stats["daily"]["users"])
+    daily_downloads = stats["daily"]["downloads"]
+    monthly_users = len(stats["monthly"]["users"])
+    monthly_downloads = stats["monthly"]["downloads"]
+
+    msg = (
+        f"**Daily Stats**\nUsers: {daily_users}\nDownloads: {daily_downloads}\n\n"
+        f"**Monthly Stats**\nUsers: {monthly_users}\nDownloads: {monthly_downloads}"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+def search_movie(query):
+    url = f"https://yts.mx/api/v2/list_movies.json?query_term={query}"
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if data["data"]["movie_count"] == 0:
+            return []
+        return data["data"]["movies"]
+    except Exception:
+        return []
+
+async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
-    user_id = update.message.from_user.id
+    results = search_movie(query)
+    user_id = str(update.message.from_user.id)
     update_stats(user_id)
-    results = search_movies(query)
+
     if not results:
         await update.message.reply_text("No results found.")
         return
-    for movie in results[:3]:
-        msg = f"*{movie['title']}*\nChoose version:"
-        buttons = [[InlineKeyboardButton(f"{res['quality']} ({res['size']})", callback_data=res["url"])]
-                   for res in movie["resolutions"]]
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for movie in results:
+        msg = f"*{movie['title']}*\nYear: {movie['year']}\nRating: {movie['rating']}\n"
+        buttons = []
+        for torrent in movie.get("torrents", []):
+            quality = torrent["quality"]
+            url = torrent["url"]
+            buttons.append([InlineKeyboardButton(f"Download {quality}", url=url)])
+
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
+
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    update_stats(query.from_user.id, download=True)
-    await query.message.reply_text(f"Here is your link:\n{query.data}")
+    user_id = str(query.from_user.id)
+    update_stats(user_id, is_download=True)
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("Not authorized.")
-        return
-    with open("stats.json") as f:
-        stats = json.load(f)
-    msg = (f"*Daily:*\nUsers: {len(stats['daily']['users'])}, Downloads: {stats['daily']['downloads']}\n\n"
-           f"*Monthly:*\nUsers: {len(stats['monthly']['users'])}, Downloads: {stats['monthly']['downloads']}")
-    await update.message.reply_text(msg, parse_mode="Markdown")
+def schedule_tasks():
+    schedule.every().day.at("00:00").do(reset_daily)
+    schedule.every().day.at("00:00").do(check_and_reset_monthly)
+
+    async def scheduler_loop():
+        while True:
+            schedule.run_pending()
+            await asyncio.sleep(60)
+
+    asyncio.create_task(scheduler_loop())
 
 def main():
-    init_stats()
-    schedule_tasks()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_query))
-    app.add_handler(CallbackQueryHandler(handle_button))
+    app.add_handler(CommandHandler("stats", stats_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search))
+    app.add_handler(CallbackQueryHandler(button_click))
+
+    schedule_tasks()
+
     app.run_polling()
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()
