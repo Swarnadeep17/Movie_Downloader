@@ -83,8 +83,7 @@ async def handle_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No results found.")
         return
     for movie in results[:3]:
-        msg = f"*{movie['title']}*
-Choose version:"
+        msg = f"*{movie['title']}*\nChoose version:"
         buttons = [[InlineKeyboardButton(f"{res['quality']} ({res['size']})", callback_data=res["url"])]
                    for res in movie["resolutions"]]
         await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
@@ -93,8 +92,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     update_stats(query.from_user.id, download=True)
-    await query.message.reply_text(f"Here is your link:
-{query.data}")
+    await query.message.reply_text(f"Here is your link:\n{query.data}")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -102,12 +100,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     with open("stats.json") as f:
         stats = json.load(f)
-    msg = (f"*Daily:*
-Users: {len(stats['daily']['users'])}, Downloads: {stats['daily']['downloads']}
-
-"
-           f"*Monthly:*
-Users: {len(stats['monthly']['users'])}, Downloads: {stats['monthly']['downloads']}")
+    msg = (f"*Daily:*\nUsers: {len(stats['daily']['users'])}, Downloads: {stats['daily']['downloads']}\n\n"
+           f"*Monthly:*\nUsers: {len(stats['monthly']['users'])}, Downloads: {stats['monthly']['downloads']}")
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 def main():
