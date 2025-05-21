@@ -5,10 +5,16 @@ import requests
 import logging
 import asyncio
 import schedule
-import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+    CallbackQueryHandler,
+)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -16,16 +22,24 @@ DATA_FILE = "stats.json"
 
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump({"daily": {"users": [], "downloads": 0},
-                   "monthly": {"users": [], "downloads": 0}}, f)
+        json.dump(
+            {
+                "daily": {"users": [], "downloads": 0},
+                "monthly": {"users": [], "downloads": 0},
+            },
+            f,
+        )
+
 
 def load_stats():
     with open(DATA_FILE, "r") as f:
         return json.load(f)
 
+
 def save_stats(stats):
     with open(DATA_FILE, "w") as f:
         json.dump(stats, f)
+
 
 def update_stats(user_id, is_download=False):
     stats = load_stats()
@@ -43,22 +57,27 @@ def update_stats(user_id, is_download=False):
 
     save_stats(stats)
 
+
 def reset_daily():
     stats = load_stats()
     stats["daily"] = {"users": [], "downloads": 0}
     save_stats(stats)
+
 
 def reset_monthly():
     stats = load_stats()
     stats["monthly"] = {"users": [], "downloads": 0}
     save_stats(stats)
 
+
 def check_and_reset_monthly():
     if datetime.datetime.now().day == 1:
         reset_monthly()
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Send the name of a movie or series to search.")
+
 
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = load_stats()
@@ -73,6 +92,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+
 def search_movie(query):
     url = f"https://yts.mx/api/v2/list_movies.json?query_term={query}"
     try:
@@ -83,6 +103,7 @@ def search_movie(query):
         return data["data"]["movies"]
     except Exception:
         return []
+
 
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
@@ -105,24 +126,29 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(buttons)
         await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
 
+
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
     update_stats(user_id, is_download=True)
 
-def schedule_tasks():
+
+async def scheduler_loop():
+    while True:
+        schedule.run_pending()
+        await asyncio.sleep(60)
+
+
+async def main_async():
+    # Setup scheduled tasks
     schedule.every().day.at("00:00").do(reset_daily)
     schedule.every().day.at("00:00").do(check_and_reset_monthly)
 
-    async def scheduler_loop():
-        while True:
-            schedule.run_pending()
-            await asyncio.sleep(60)
-
+    # Create scheduler task
     asyncio.create_task(scheduler_loop())
 
-def main():
+    # Build the bot app
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -130,10 +156,14 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search))
     app.add_handler(CallbackQueryHandler(button_click))
 
-    schedule_tasks()
+    # Run the bot polling (blocks here)
+    await app.run_polling()
 
-    app.run_polling()
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main_async())
+
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()
