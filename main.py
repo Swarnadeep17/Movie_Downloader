@@ -5,6 +5,7 @@ import requests
 import logging
 import asyncio
 import schedule
+import nest_asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -23,11 +24,7 @@ DATA_FILE = "stats.json"
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump(
-            {
-                "daily": {"users": [], "downloads": 0},
-                "monthly": {"users": [], "downloads": 0},
-            },
-            f,
+            {"daily": {"users": [], "downloads": 0}, "monthly": {"users": [], "downloads": 0}}, f
         )
 
 
@@ -134,21 +131,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_stats(user_id, is_download=True)
 
 
-async def scheduler_loop():
-    while True:
-        schedule.run_pending()
-        await asyncio.sleep(60)
-
-
-async def main_async():
-    # Setup scheduled tasks
+def schedule_tasks():
     schedule.every().day.at("00:00").do(reset_daily)
     schedule.every().day.at("00:00").do(check_and_reset_monthly)
 
-    # Create scheduler task
+    async def scheduler_loop():
+        while True:
+            schedule.run_pending()
+            await asyncio.sleep(60)
+
     asyncio.create_task(scheduler_loop())
 
-    # Build the bot app
+
+async def main_async():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -156,14 +151,15 @@ async def main_async():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search))
     app.add_handler(CallbackQueryHandler(button_click))
 
-    # Run the bot polling (blocks here)
+    schedule_tasks()
+
     await app.run_polling()
 
 
-def main():
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main_async())
-
-
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO)
+    nest_asyncio.apply()  # Patch event loop to allow nested usage
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(main_async())
+    loop.run_forever()
